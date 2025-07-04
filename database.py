@@ -50,7 +50,22 @@ class DatabaseManager:
             cursor.execute("DROP TABLE IF EXISTS property_images")
             cursor.execute("DROP TABLE IF EXISTS properties")
             cursor.execute("DROP TABLE IF EXISTS users")
+            cursor.execute("DROP TABLE IF EXISTS admins")
             cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+            
+            # Admins table
+            cursor.execute('''
+                CREATE TABLE admins (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    username VARCHAR(50) UNIQUE NOT NULL,
+                    email VARCHAR(100) UNIQUE NOT NULL,
+                    password_hash VARCHAR(64) NOT NULL,
+                    first_name VARCHAR(50) NOT NULL,
+                    last_name VARCHAR(50) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            ''')
             
             # Users table
             cursor.execute('''
@@ -158,6 +173,13 @@ class DatabaseManager:
                 cursor.close()
                 return
             
+            # Create default admin user
+            admin_password_hash = self.hash_password('admin123')
+            cursor.execute('''
+                INSERT INTO admins (username, email, password_hash, first_name, last_name)
+                VALUES (%s, %s, %s, %s, %s)
+            ''', ('admin', 'admin@realestate.com', admin_password_hash, 'Admin', 'User'))
+            
             # Create a default agent user first
             default_agent = {
                 'username': 'agent_demo',
@@ -213,6 +235,637 @@ class DatabaseManager:
         """Hash password using SHA-256"""
         return hashlib.sha256(password.encode()).hexdigest()
     
+    # Admin authentication methods
+    def authenticate_admin(self, username: str, password: str) -> Optional[Dict]:
+        """Authenticate admin user"""
+        try:
+            cursor = self.connection.cursor()
+            password_hash = self.hash_password(password)
+            
+            cursor.execute('''
+                SELECT id, username, email, first_name, last_name
+                FROM admins WHERE username = %s AND password_hash = %s AND is_active = TRUE
+            ''', (username, password_hash))
+            
+            result = cursor.fetchone()
+            cursor.close()
+            
+            if result:
+                return {
+                    'id': result[0],
+                    'username': result[1],
+                    'email': result[2],
+                    'first_name': result[3],
+                    'last_name': result[4]
+                }
+            return None
+            
+        except Error as e:
+            print(f"Error authenticating admin: {e}")
+            return None
+    
+    # Admin dashboard methods
+    def get_admin_statistics(self) -> Dict:
+        """Get statistics for admin dashboard"""
+        try:
+            cursor = self.connection.cursor()
+            
+            # Total properties
+            cursor.execute("SELECT COUNT(*) FROM properties")
+            total_properties = cursor.fetchone()[0]
+            
+            # Total users
+            cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = TRUE")
+            total_users = cursor.fetchone()[0]
+            
+            # Total transactions
+            cursor.execute("SELECT COUNT(*) FROM transactions")
+            total_transactions = cursor.fetchone()[0]
+            
+            # Monthly revenue
+            cursor.execute('''
+                SELECT COALESCE(SUM(amount), 0) FROM transactions 
+                WHERE MONTH(transaction_date) = MONTH(CURRENT_DATE()) 
+                AND YEAR(transaction_date) = YEAR(CURRENT_DATE())
+                AND status = 'completed'
+            ''')
+            monthly_revenue = cursor.fetchone()[0]
+            
+            cursor.close()
+            
+            return {
+                'total_properties': total_properties,
+                'total_users': total_users,
+                'total_transactions': total_transactions,
+                'monthly_revenue': float(monthly_revenue) if monthly_revenue else 0
+            }
+            
+        except Error as e:
+            print(f"Error getting admin statistics: {e}")
+            return {
+                'total_properties': 0,
+                'total_users': 0,
+                'total_transactions': 0,
+                'monthly_revenue': 0
+            }
+    
+    def get_recent_activities(self, limit: int = 20) -> List[str]:
+        """Get recent system activities"""
+        try:
+            cursor = self.connection.cursor()
+            
+            activities = []
+            
+            # Recent transactions
+            cursor.execute('''
+                SELECT t.transaction_type, t.amount, t.transaction_date, 
+                       p.title, u.first_name, u.last_name
+                FROM transactions t
+                JOIN properties p ON t.property_id = p.id
+                JOIN users u ON t.buyer_id = u.id
+                ORDER BY t.transaction_date DESC
+                LIMIT %s
+            ''', (limit // 2,))
+            
+            transactions = cursor.fetchall()
+            for trans in transactions:
+                activity = f"{trans[4]} {trans[5]} {trans[0]}d '{trans[3]}' for ${trans[1]:,.0f}"
+                activities.append(activity)
+            
+            # Recent user registrations
+            cursor.execute('''
+                SELECT first_name, last_name, created_at, user_type
+                FROM users
+                ORDER BY created_at DESC
+                LIMIT %s
+            ''', (limit // 2,))
+            
+            users = cursor.fetchall()
+            for user in users:
+                activity = f"New {user[3]} registered: {user[0]} {user[1]}"
+                activities.append(activity)
+            
+            cursor.close()
+            
+            # Sort by timestamp and return
+            return activities[:limit]
+            
+        except Error as e:
+            print(f"Error getting recent activities: {e}")
+            return []
+    
+    # Property management methods
+    def get_all_properties_admin(self) -> List[Dict]:
+        """Get all properties for admin management"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('''
+                SELECT p.*, 
+                       CONCAT(owner.first_name, ' ', owner.last_name) as owner_name,
+                       CONCAT(agent.first_name, ' ', agent.last_name) as agent_name
+                FROM properties p
+                LEFT JOIN users owner ON p.owner_id = owner.id
+                LEFT JOIN users agent ON p.agent_id = agent.id
+                ORDER BY p.created_at DESC
+            ''')
+            
+            results = cursor.fetchall()
+            cursor.close()
+            
+            properties = []
+            for row in results:
+                properties.append({
+                    'id': row[0],
+                    'title': row[1],
+                    'description': row[2],
+                    'property_type': row[3],
+                    'address': row[4],
+                    'city': row[5],
+                    'state': row[6],
+                    'zip_code': row[7],
+                    'price': float(row[8]),
+                    'bedrooms': row[9],
+                    'bathrooms': row[10],
+                    'square_feet': row[11],
+                    'lot_size': float(row[12]) if row[12] else 0,
+                    'year_built': row[13],
+                    'listing_type': row[14],
+                    'owner_id': row[15],
+                    'agent_id': row[16],
+                    'status': row[17],
+                    'created_at': row[18],
+                    'updated_at': row[19],
+                    'owner_name': row[20] or 'N/A',
+                    'agent_name': row[21] or 'N/A'
+                })
+            
+            return properties
+            
+        except Error as e:
+            print(f"Error getting properties for admin: {e}")
+            return []
+    
+    def get_property_by_id_admin(self, property_id: int) -> Optional[Dict]:
+        """Get property by ID for admin"""
+        properties = self.get_all_properties_admin()
+        for prop in properties:
+            if prop['id'] == property_id:
+                return prop
+        return None
+    
+    def create_property(self, data: Dict) -> bool:
+        """Create new property"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('''
+                INSERT INTO properties (title, description, property_type, address, city, state,
+                                      zip_code, price, bedrooms, bathrooms, square_feet, lot_size,
+                                      year_built, listing_type, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (
+                data['title'], data.get('description'), data['property_type'],
+                data['address'], data['city'], data['state'], data['zip_code'],
+                data['price'], data.get('bedrooms'), data.get('bathrooms'),
+                data.get('square_feet'), data.get('lot_size'), data.get('year_built'),
+                data['listing_type'], data.get('status', 'available')
+            ))
+            
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error creating property: {e}")
+            return False
+    
+    def update_property(self, property_id: int, data: Dict) -> bool:
+        """Update existing property"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('''
+                UPDATE properties SET
+                    title = %s, description = %s, property_type = %s, address = %s,
+                    city = %s, state = %s, zip_code = %s, price = %s,
+                    bedrooms = %s, bathrooms = %s, square_feet = %s, lot_size = %s,
+                    year_built = %s, listing_type = %s, status = %s
+                WHERE id = %s
+            ''', (
+                data['title'], data.get('description'), data['property_type'],
+                data['address'], data['city'], data['state'], data['zip_code'],
+                data['price'], data.get('bedrooms'), data.get('bathrooms'),
+                data.get('square_feet'), data.get('lot_size'), data.get('year_built'),
+                data['listing_type'], data.get('status', 'available'), property_id
+            ))
+            
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error updating property: {e}")
+            return False
+    
+    def delete_property(self, property_id: int) -> bool:
+        """Delete property"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("DELETE FROM properties WHERE id = %s", (property_id,))
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error deleting property: {e}")
+            return False
+    
+    # User management methods
+    def get_all_users_admin(self) -> List[Dict]:
+        """Get all users for admin management"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('''
+                SELECT id, username, email, first_name, last_name, phone, user_type, created_at, is_active
+                FROM users
+                ORDER BY created_at DESC
+            ''')
+            
+            results = cursor.fetchall()
+            cursor.close()
+            
+            users = []
+            for row in results:
+                users.append({
+                    'id': row[0],
+                    'username': row[1],
+                    'email': row[2],
+                    'first_name': row[3],
+                    'last_name': row[4],
+                    'phone': row[5],
+                    'user_type': row[6],
+                    'created_at': row[7],
+                    'is_active': row[8]
+                })
+            
+            return users
+            
+        except Error as e:
+            print(f"Error getting users for admin: {e}")
+            return []
+    
+    def get_user_by_id_admin(self, user_id: int) -> Optional[Dict]:
+        """Get user by ID for admin"""
+        users = self.get_all_users_admin()
+        for user in users:
+            if user['id'] == user_id:
+                return user
+        return None
+    
+    def get_user_statistics(self, user_id: int) -> Dict:
+        """Get user statistics"""
+        try:
+            cursor = self.connection.cursor()
+            
+            # Properties owned
+            cursor.execute("SELECT COUNT(*) FROM properties WHERE owner_id = %s", (user_id,))
+            properties_owned = cursor.fetchone()[0]
+            
+            # Transactions
+            cursor.execute("SELECT COUNT(*) FROM transactions WHERE buyer_id = %s OR seller_id = %s", (user_id, user_id))
+            transactions = cursor.fetchone()[0]
+            
+            # Favorites
+            cursor.execute("SELECT COUNT(*) FROM favorites WHERE user_id = %s", (user_id,))
+            favorites = cursor.fetchone()[0]
+            
+            cursor.close()
+            
+            return {
+                'properties_owned': properties_owned,
+                'transactions': transactions,
+                'favorites': favorites
+            }
+            
+        except Error as e:
+            print(f"Error getting user statistics: {e}")
+            return {'properties_owned': 0, 'transactions': 0, 'favorites': 0}
+    
+    def create_user_admin(self, data: Dict) -> bool:
+        """Create new user (admin function)"""
+        try:
+            cursor = self.connection.cursor()
+            password_hash = self.hash_password(data['password'])
+            
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash, first_name, last_name, phone, user_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ''', (
+                data['username'], data['email'], password_hash,
+                data['first_name'], data['last_name'], data.get('phone'), data['user_type']
+            ))
+            
+            cursor.close()
+            return True
+            
+        except mysql.connector.IntegrityError:
+            return False
+        except Error as e:
+            print(f"Error creating user: {e}")
+            return False
+    
+    def update_user_admin(self, user_id: int, data: Dict) -> bool:
+        """Update user (admin function)"""
+        try:
+            cursor = self.connection.cursor()
+            
+            if data.get('password'):
+                # Update with new password
+                password_hash = self.hash_password(data['password'])
+                cursor.execute('''
+                    UPDATE users SET username = %s, email = %s, password_hash = %s,
+                                   first_name = %s, last_name = %s, phone = %s, user_type = %s
+                    WHERE id = %s
+                ''', (
+                    data['username'], data['email'], password_hash,
+                    data['first_name'], data['last_name'], data.get('phone'),
+                    data['user_type'], user_id
+                ))
+            else:
+                # Update without changing password
+                cursor.execute('''
+                    UPDATE users SET username = %s, email = %s, first_name = %s,
+                                   last_name = %s, phone = %s, user_type = %s
+                    WHERE id = %s
+                ''', (
+                    data['username'], data['email'], data['first_name'],
+                    data['last_name'], data.get('phone'), data['user_type'], user_id
+                ))
+            
+            cursor.close()
+            return True
+            
+        except mysql.connector.IntegrityError:
+            return False
+        except Error as e:
+            print(f"Error updating user: {e}")
+            return False
+    
+    def update_user_status(self, user_id: int, is_active: bool) -> bool:
+        """Update user active status"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("UPDATE users SET is_active = %s WHERE id = %s", (is_active, user_id))
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error updating user status: {e}")
+            return False
+    
+    def delete_user(self, user_id: int) -> bool:
+        """Delete user and all associated data"""
+        try:
+            cursor = self.connection.cursor()
+            
+            # Delete in order due to foreign key constraints
+            cursor.execute("DELETE FROM favorites WHERE user_id = %s", (user_id,))
+            cursor.execute("DELETE FROM transactions WHERE buyer_id = %s OR seller_id = %s", (user_id, user_id))
+            cursor.execute("DELETE FROM properties WHERE owner_id = %s OR agent_id = %s", (user_id, user_id))
+            cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+            
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error deleting user: {e}")
+            return False
+    
+    # Transaction management methods
+    def get_all_transactions_admin(self, status_filter: str = None, type_filter: str = None) -> List[Dict]:
+        """Get all transactions for admin management"""
+        try:
+            cursor = self.connection.cursor()
+            
+            query = '''
+                SELECT t.*, p.title as property_title, p.address as property_address,
+                       CONCAT(buyer.first_name, ' ', buyer.last_name) as buyer_name,
+                       buyer.email as buyer_email,
+                       CONCAT(seller.first_name, ' ', seller.last_name) as seller_name,
+                       seller.email as seller_email
+                FROM transactions t
+                JOIN properties p ON t.property_id = p.id
+                JOIN users buyer ON t.buyer_id = buyer.id
+                JOIN users seller ON t.seller_id = seller.id
+                WHERE 1=1
+            '''
+            params = []
+            
+            if status_filter:
+                query += " AND t.status = %s"
+                params.append(status_filter)
+            
+            if type_filter:
+                query += " AND t.transaction_type = %s"
+                params.append(type_filter)
+            
+            query += " ORDER BY t.transaction_date DESC"
+            
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            cursor.close()
+            
+            transactions = []
+            for row in results:
+                transactions.append({
+                    'id': row[0],
+                    'property_id': row[1],
+                    'buyer_id': row[2],
+                    'seller_id': row[3],
+                    'transaction_type': row[4],
+                    'amount': float(row[5]),
+                    'transaction_date': row[6],
+                    'status': row[7],
+                    'notes': row[8],
+                    'property_title': row[9],
+                    'property_address': row[10],
+                    'buyer_name': row[11],
+                    'buyer_email': row[12],
+                    'seller_name': row[13],
+                    'seller_email': row[14]
+                })
+            
+            return transactions
+            
+        except Error as e:
+            print(f"Error getting transactions for admin: {e}")
+            return []
+    
+    def get_transaction_by_id_admin(self, transaction_id: int) -> Optional[Dict]:
+        """Get transaction by ID for admin"""
+        transactions = self.get_all_transactions_admin()
+        for trans in transactions:
+            if trans['id'] == transaction_id:
+                return trans
+        return None
+    
+    def update_transaction_status(self, transaction_id: int, status: str) -> bool:
+        """Update transaction status"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("UPDATE transactions SET status = %s WHERE id = %s", (status, transaction_id))
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error updating transaction status: {e}")
+            return False
+    
+    def cancel_transaction(self, transaction_id: int) -> bool:
+        """Cancel transaction and make property available again"""
+        try:
+            cursor = self.connection.cursor()
+            
+            # Get transaction details
+            cursor.execute("SELECT property_id FROM transactions WHERE id = %s", (transaction_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                property_id = result[0]
+                
+                # Update transaction status
+                cursor.execute("UPDATE transactions SET status = 'cancelled' WHERE id = %s", (transaction_id,))
+                
+                # Make property available again
+                cursor.execute("UPDATE properties SET status = 'available' WHERE id = %s", (property_id,))
+            
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error cancelling transaction: {e}")
+            return False
+    
+    def delete_transaction(self, transaction_id: int) -> bool:
+        """Delete transaction"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("DELETE FROM transactions WHERE id = %s", (transaction_id,))
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error deleting transaction: {e}")
+            return False
+    
+    # Analytics methods
+    def get_analytics_data(self) -> Dict:
+        """Get comprehensive analytics data"""
+        try:
+            cursor = self.connection.cursor()
+            
+            analytics = {}
+            
+            # Revenue analytics
+            cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE status = 'completed'")
+            analytics['total_revenue'] = float(cursor.fetchone()[0])
+            
+            cursor.execute('''
+                SELECT COALESCE(SUM(amount), 0) FROM transactions 
+                WHERE status = 'completed' AND MONTH(transaction_date) = MONTH(CURRENT_DATE())
+                AND YEAR(transaction_date) = YEAR(CURRENT_DATE())
+            ''')
+            analytics['monthly_sales'] = float(cursor.fetchone()[0])
+            
+            cursor.execute('''
+                SELECT COALESCE(SUM(amount), 0) FROM transactions 
+                WHERE status = 'completed' AND YEAR(transaction_date) = YEAR(CURRENT_DATE())
+            ''')
+            analytics['yearly_sales'] = float(cursor.fetchone()[0])
+            
+            # Property analytics
+            cursor.execute("SELECT COUNT(*) FROM properties WHERE status IN ('sold', 'rented')")
+            analytics['properties_sold'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM properties WHERE status = 'available'")
+            analytics['active_listings'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM properties")
+            analytics['total_properties'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM properties WHERE status = 'available'")
+            analytics['available_properties'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM properties WHERE status IN ('sold', 'rented')")
+            analytics['sold_properties'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COALESCE(AVG(price), 0) FROM properties WHERE status = 'available'")
+            analytics['avg_property_price'] = float(cursor.fetchone()[0])
+            
+            cursor.execute("SELECT COALESCE(AVG(price), 0) FROM transactions WHERE status = 'completed'")
+            analytics['avg_sale_price'] = float(cursor.fetchone()[0])
+            
+            # User analytics
+            cursor.execute("SELECT COUNT(*) FROM users")
+            analytics['total_users'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = TRUE")
+            analytics['active_users'] = cursor.fetchone()[0]
+            
+            cursor.execute('''
+                SELECT COUNT(*) FROM users 
+                WHERE MONTH(created_at) = MONTH(CURRENT_DATE()) 
+                AND YEAR(created_at) = YEAR(CURRENT_DATE())
+            ''')
+            analytics['new_users_month'] = cursor.fetchone()[0]
+            
+            # Calculate user growth (simplified)
+            analytics['user_growth'] = 5.2  # Placeholder
+            
+            # Market analytics
+            analytics['avg_days_market'] = 45  # Placeholder
+            analytics['conversion_rate'] = 12.5  # Placeholder
+            
+            cursor.close()
+            return analytics
+            
+        except Error as e:
+            print(f"Error getting analytics data: {e}")
+            return {}
+    
+    def get_top_properties(self) -> List[Dict]:
+        """Get top performing properties"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('''
+                SELECT p.*, t.amount as sale_price
+                FROM properties p
+                JOIN transactions t ON p.id = t.property_id
+                WHERE t.status = 'completed'
+                ORDER BY t.amount DESC
+                LIMIT 20
+            ''')
+            
+            results = cursor.fetchall()
+            cursor.close()
+            
+            properties = []
+            for row in results:
+                properties.append({
+                    'id': row[0],
+                    'title': row[1],
+                    'property_type': row[3],
+                    'price': float(row[20]),  # sale_price from transaction
+                    'days_on_market': 30  # Placeholder
+                })
+            
+            return properties
+            
+        except Error as e:
+            print(f"Error getting top properties: {e}")
+            return []
+    
+    # Existing methods (keep all the original methods)
     def create_user(self, username: str, email: str, password: str, 
                    first_name: str, last_name: str, phone: str = None, 
                    user_type: str = 'buyer') -> bool:

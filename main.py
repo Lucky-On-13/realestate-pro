@@ -3,6 +3,8 @@ from tkinter import ttk, messagebox
 import os
 from database import DatabaseManager
 from auth import AuthWindow
+from admin_auth import AdminAuthWindow
+from admin_dashboard import AdminDashboard
 from property_details import PropertyDetailsWindow
 from ui_components import ModernButton, PropertyCard, SearchFilter
 from config import Config
@@ -65,6 +67,18 @@ class RealEstateApp:
         # Right side controls
         right_frame = tk.Frame(header_content, bg=Config.PRIMARY_COLOR)
         right_frame.pack(side="right")
+        
+        # Admin access button
+        admin_btn = ModernButton(
+            right_frame,
+            text="Admin",
+            command=self.show_admin_auth,
+            style="outline",
+            font=(Config.FONT_FAMILY, Config.FONT_SIZE_SMALL),
+            padx=10,
+            pady=5
+        )
+        admin_btn.pack(side="right", padx=(0, 10))
         
         # User info and login/logout
         self.user_frame = tk.Frame(right_frame, bg=Config.PRIMARY_COLOR)
@@ -204,11 +218,19 @@ class RealEstateApp:
         """Show authentication window"""
         AuthWindow(self.root, self.db_manager, self.on_login_success)
     
+    def show_admin_auth(self):
+        """Show admin authentication window"""
+        AdminAuthWindow(self.root, self.db_manager, self.on_admin_login_success)
+    
     def on_login_success(self, user):
         """Handle successful login"""
         self.current_user = user
         self.update_user_display()
         self.update_status(f"Logged in as {user['first_name']}")
+    
+    def on_admin_login_success(self, admin):
+        """Handle successful admin login"""
+        AdminDashboard(self.root, self.db_manager, admin)
     
     def logout(self):
         """Handle user logout"""
