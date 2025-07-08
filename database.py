@@ -225,6 +225,23 @@ class DatabaseManager:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', sample_properties)
             
+            # Add sample images for properties
+            cursor.execute("SELECT id FROM properties LIMIT 3")
+            property_ids = cursor.fetchall()
+            
+            sample_images = [
+                "sample_house1.jpg",
+                "sample_apartment1.jpg", 
+                "sample_condo1.jpg"
+            ]
+            
+            for i, (property_id,) in enumerate(property_ids):
+                if i < len(sample_images):
+                    cursor.execute('''
+                        INSERT INTO property_images (property_id, image_path, is_primary)
+                        VALUES (%s, %s, %s)
+                    ''', (property_id, sample_images[i], True))
+            
             cursor.close()
             print("Sample data populated successfully")
             
@@ -1001,6 +1018,116 @@ class DatabaseManager:
                 return prop
         return None
     
+    # Image management methods
+    def add_property_image(self, property_id: int, image_path: str, is_primary: bool = False) -> bool:
+        """Add image to property"""
+        try:
+            cursor = self.connection.cursor()
+            
+            # If this is primary, unset other primary images
+            if is_primary:
+                cursor.execute('''
+                    UPDATE property_images SET is_primary = FALSE 
+                    WHERE property_id = %s
+                ''', (property_id,))
+            
+            cursor.execute('''
+                INSERT INTO property_images (property_id, image_path, is_primary)
+                VALUES (%s, %s, %s)
+            ''', (property_id, image_path, is_primary))
+            
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error adding property image: {e}")
+            return False
+    
+    def get_property_images(self, property_id: int) -> List[Dict]:
+        """Get all images for a property"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('''
+                SELECT id, image_path, is_primary
+                FROM property_images
+                WHERE property_id = %s
+                ORDER BY is_primary DESC, id ASC
+            ''', (property_id,))
+            
+            results = cursor.fetchall()
+            cursor.close()
+            
+            images = []
+            for row in results:
+                images.append({
+                    'id': row[0],
+                    'image_path': row[1],
+                    'is_primary': row[2]
+                })
+            
+            return images
+            
+        except Error as e:
+            print(f"Error getting property images: {e}")
+            return []
+    
+    def set_primary_image(self, property_id: int, image_id: int) -> bool:
+        """Set an image as primary for property"""
+        try:
+            cursor = self.connection.cursor()
+            
+            # Unset all primary images for this property
+            cursor.execute('''
+                UPDATE property_images SET is_primary = FALSE 
+                WHERE property_id = %s
+            ''', (property_id,))
+            
+            # Set the selected image as primary
+            cursor.execute('''
+                UPDATE property_images SET is_primary = TRUE 
+                WHERE id = %s AND property_id = %s
+            ''', (image_id, property_id))
+            
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error setting primary image: {e}")
+            return False
+    
+    def delete_property_image(self, image_id: int) -> bool:
+        """Delete property image"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("DELETE FROM property_images WHERE id = %s", (image_id,))
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error deleting property image: {e}")
+            return False
+    
+    def get_primary_image(self, property_id: int) -> Optional[str]:
+        """Get primary image path for property"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('''
+                SELECT image_path FROM property_images
+                WHERE property_id = %s AND is_primary = TRUE
+                LIMIT 1
+            ''', (property_id,))
+            
+            result = cursor.fetchone()
+            cursor.close()
+            
+            return result[0] if result else None
+            
+        except Error as e:
+            print(f"Error getting primary image: {e}")
+            return None
+    
     def create_transaction(self, property_id: int, buyer_id: int, seller_id: int, 
                           transaction_type: str, amount: float, notes: str = None) -> bool:
         """Create a new transaction"""
@@ -1072,6 +1199,38 @@ class DatabaseManager:
         except Error as e:
             print(f"Error getting user favorites: {e}")
             return []
+    
+    def remove_from_favorites(self, user_id: int, property_id: int) -> bool:
+        """Remove property from user's favorites"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                DELETE FROM favorites WHERE user_id = %s AND property_id = %s
+            ''', (user_id, property_id))
+            cursor.close()
+            return True
+            
+        except Error as e:
+            print(f"Error removing from favorites: {e}")
+            return False
+    
+    def is_favorite(self, user_id: int, property_id: int) -> bool:
+        """Check if property is in user's favorites"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                SELECT COUNT(*) FROM favorites 
+                WHERE user_id = %s AND property_id = %s
+            ''', (user_id, property_id))
+            
+            result = cursor.fetchone()
+            cursor.close()
+            
+            return result[0] > 0
+            
+        except Error as e:
+            print(f"Error checking favorite: {e}")
+            return False
     
     def close_connection(self):
         """Close database connection"""

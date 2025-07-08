@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from ui_components import ModernButton, ModernEntry
 from config import Config
+from image_manager import ImageUploadWidget, ImageGalleryWidget
 
 class PropertyManagementWindow:
     def __init__(self, parent, db_manager, admin_user):
@@ -336,10 +337,12 @@ class PropertyEditDialog:
         
         self.window = tk.Toplevel(parent)
         self.window.title("Edit Property" if property_data else "Add Property")
-        self.window.geometry("600x700")
+        self.window.geometry("800x800")
         self.window.configure(bg=Config.BACKGROUND_COLOR)
         self.window.transient(parent)
         self.window.grab_set()
+        
+        self.uploaded_images = []
         
         self.create_widgets()
         if property_data:
@@ -405,6 +408,36 @@ class PropertyEditDialog:
         form_content = tk.Frame(self.form_frame, bg=Config.BACKGROUND_COLOR)
         form_content.pack(fill="both", expand=True, padx=30, pady=20)
         
+        # Image upload section
+        image_section = tk.Frame(form_content, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
+        image_section.pack(fill="x", pady=(0, 20))
+        
+        image_header = tk.Label(
+            image_section,
+            text="Property Images",
+            font=(Config.FONT_FAMILY, Config.FONT_SIZE_LARGE, "bold"),
+            bg=Config.CARD_COLOR,
+            fg=Config.TEXT_PRIMARY
+        )
+        image_header.pack(pady=10)
+        
+        if self.property_data:
+            # Show existing images for editing
+            self.image_gallery = ImageGalleryWidget(
+                image_section,
+                self.property_data['id'],
+                self.db_manager,
+                bg=Config.CARD_COLOR
+            )
+            self.image_gallery.pack(fill="x", padx=20, pady=(0, 20))
+        else:
+            # Image upload widget for new property
+            self.image_upload = ImageUploadWidget(
+                image_section,
+                on_image_selected=self.on_image_selected
+            )
+            self.image_upload.pack(padx=20, pady=(0, 20))
+        
         # Form fields
         fields = [
             ("Title", "title", "text"),
@@ -455,6 +488,11 @@ class PropertyEditDialog:
                 entry = ModernEntry(field_frame, placeholder=f"Enter {label.lower()}")
                 entry.pack(fill="x")
                 self.field_vars[field_name] = entry
+    
+    def on_image_selected(self, filename):
+        """Handle image selection for new property"""
+        if filename:
+            self.uploaded_images.append(filename)
     
     def populate_fields(self):
         """Populate fields with existing property data"""
@@ -509,6 +547,19 @@ class PropertyEditDialog:
                 # Create new property
                 success = self.db_manager.create_property(data)
                 message = "Property created successfully"
+                
+                # Add uploaded images for new property
+                if success and self.uploaded_images:
+                    # Get the newly created property ID
+                    cursor = self.db_manager.connection.cursor()
+                    cursor.execute("SELECT LAST_INSERT_ID()")
+                    property_id = cursor.fetchone()[0]
+                    cursor.close()
+                    
+                    # Add images to the property
+                    for i, image_filename in enumerate(self.uploaded_images):
+                        is_primary = (i == 0)  # First image is primary
+                        self.db_manager.add_property_image(property_id, image_filename, is_primary)
             
             if success:
                 messagebox.showinfo("Success", message)

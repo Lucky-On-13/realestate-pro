@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 from ui_components import ModernButton
 from config import Config
+from image_manager import ImageManager, ImageGalleryWidget
 
 class PropertyDetailsWindow:
     def __init__(self, parent, property_data, db_manager, current_user=None):
@@ -9,10 +10,11 @@ class PropertyDetailsWindow:
         self.property_data = property_data
         self.db_manager = db_manager
         self.current_user = current_user
+        self.image_manager = ImageManager()
         
         self.window = tk.Toplevel(parent)
         self.window.title(f"Property Details - {property_data['title']}")
-        self.window.geometry("800x600")
+        self.window.geometry("900x700")
         self.window.configure(bg=Config.BACKGROUND_COLOR)
         
         # Center the window
@@ -22,12 +24,42 @@ class PropertyDetailsWindow:
         self.create_widgets()
     
     def create_widgets(self):
-        # Main container with scrollbar
-        main_frame = tk.Frame(self.window, bg=Config.BACKGROUND_COLOR)
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        # Create scrollable main container
+        canvas = tk.Canvas(self.window, bg=Config.BACKGROUND_COLOR)
+        scrollbar = tk.Scrollbar(self.window, orient="vertical", command=canvas.yview)
+        
+        main_frame = tk.Frame(canvas, bg=Config.BACKGROUND_COLOR)
+        
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.create_window((0, 0), window=main_frame, anchor="nw")
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Update scroll region when frame changes
+        def configure_scroll_region(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas_width = canvas.winfo_width()
+            canvas.itemconfig(canvas.create_window((0, 0), window=main_frame, anchor="nw"), width=canvas_width)
+        
+        main_frame.bind("<Configure>", configure_scroll_region)
+        canvas.bind("<Configure>", configure_scroll_region)
+        
+        # Mouse wheel scrolling
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        
+        # Content with padding
+        content_frame = tk.Frame(main_frame, bg=Config.BACKGROUND_COLOR)
+        content_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Image gallery section
+        self.create_image_section(content_frame)
         
         # Title section
-        title_frame = tk.Frame(main_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
+        title_frame = tk.Frame(content_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
         title_frame.pack(fill="x", pady=(0, 20))
         
         title_content = tk.Frame(title_frame, bg=Config.CARD_COLOR, padx=20, pady=20)
@@ -72,7 +104,7 @@ class PropertyDetailsWindow:
         address_label.pack(fill="x", pady=(5, 0))
         
         # Property details section
-        details_frame = tk.Frame(main_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
+        details_frame = tk.Frame(content_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
         details_frame.pack(fill="x", pady=(0, 20))
         
         details_content = tk.Frame(details_frame, bg=Config.CARD_COLOR, padx=20, pady=20)
@@ -136,7 +168,7 @@ class PropertyDetailsWindow:
         
         # Description section
         if self.property_data['description']:
-            desc_frame = tk.Frame(main_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
+            desc_frame = tk.Frame(content_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
             desc_frame.pack(fill="x", pady=(0, 20))
             
             desc_content = tk.Frame(desc_frame, bg=Config.CARD_COLOR, padx=20, pady=20)
@@ -159,13 +191,13 @@ class PropertyDetailsWindow:
                 bg=Config.CARD_COLOR,
                 fg=Config.TEXT_PRIMARY,
                 anchor="w",
-                wraplength=820,
+                wraplength=800,
                 justify="left"
             )
             desc_text.pack(fill="x")
         
         # Agent information
-        agent_frame = tk.Frame(main_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
+        agent_frame = tk.Frame(content_frame, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
         agent_frame.pack(fill="x", pady=(0, 20))
         
         agent_content = tk.Frame(agent_frame, bg=Config.CARD_COLOR, padx=20, pady=20)
@@ -215,7 +247,7 @@ class PropertyDetailsWindow:
             ).pack(side="left", padx=(10, 0))
         
         # Action buttons
-        action_frame = tk.Frame(main_frame, bg=Config.BACKGROUND_COLOR)
+        action_frame = tk.Frame(content_frame, bg=Config.BACKGROUND_COLOR)
         action_frame.pack(fill="x", pady=(20, 0))
         
         if self.current_user:
@@ -236,13 +268,18 @@ class PropertyDetailsWindow:
                 )
                 rent_btn.pack(side="left", padx=(0, 10))
             
-            favorite_btn = ModernButton(
+            # Check if already in favorites
+            is_favorite = self.db_manager.is_favorite(self.current_user['id'], self.property_data['id'])
+            favorite_text = "Remove from Favorites" if is_favorite else "Add to Favorites"
+            favorite_style = "outline" if not is_favorite else "secondary"
+            
+            self.favorite_btn = ModernButton(
                 action_frame,
-                text="Add to Favorites",
+                text=favorite_text,
                 command=self.handle_favorite,
-                style="outline"
+                style=favorite_style
             )
-            favorite_btn.pack(side="left", padx=(0, 10))
+            self.favorite_btn.pack(side="left", padx=(0, 10))
         else:
             # Show login prompt for non-logged users
             login_prompt = tk.Label(
@@ -261,6 +298,69 @@ class PropertyDetailsWindow:
             style="outline"
         )
         close_btn.pack(side="right")
+    
+    def create_image_section(self, parent):
+        """Create image gallery section"""
+        image_frame = tk.Frame(parent, bg=Config.CARD_COLOR, relief="solid", borderwidth=1)
+        image_frame.pack(fill="x", pady=(0, 20))
+        
+        # Main property image
+        main_image_frame = tk.Frame(image_frame, bg=Config.CARD_COLOR)
+        main_image_frame.pack(fill="x", padx=20, pady=20)
+        
+        # Load primary image
+        try:
+            primary_image = self.property_data.get('primary_image')
+            if primary_image:
+                img = self.image_manager.load_image_for_display(
+                    primary_image, 
+                    size=(600, 300)
+                )
+                
+                image_label = tk.Label(
+                    main_image_frame,
+                    image=img,
+                    bg="white",
+                    relief="solid",
+                    borderwidth=1
+                )
+                image_label.pack()
+                # Keep reference to prevent garbage collection
+                image_label.image = img
+            else:
+                # Placeholder if no image
+                placeholder_label = tk.Label(
+                    main_image_frame,
+                    text="📷 No Images Available",
+                    font=(Config.FONT_FAMILY, Config.FONT_SIZE_LARGE),
+                    bg=Config.BORDER_COLOR,
+                    fg=Config.TEXT_SECONDARY,
+                    width=60,
+                    height=15
+                )
+                placeholder_label.pack()
+        except Exception as e:
+            print(f"Error loading main property image: {e}")
+            # Error placeholder
+            error_label = tk.Label(
+                main_image_frame,
+                text="📷 Error Loading Image",
+                font=(Config.FONT_FAMILY, Config.FONT_SIZE_LARGE),
+                bg=Config.BORDER_COLOR,
+                fg=Config.TEXT_SECONDARY,
+                width=60,
+                height=15
+            )
+            error_label.pack()
+        
+        # Image gallery for additional images
+        gallery_widget = ImageGalleryWidget(
+            image_frame, 
+            self.property_data['id'], 
+            self.db_manager,
+            bg=Config.CARD_COLOR
+        )
+        gallery_widget.pack(fill="x", padx=20, pady=(0, 20))
     
     def handle_purchase(self):
         """Handle property purchase"""
@@ -358,12 +458,30 @@ class PropertyDetailsWindow:
             messagebox.showerror("Error", "Please log in to add favorites")
             return
         
-        success = self.db_manager.add_to_favorites(
-            self.current_user['id'],
-            self.property_data['id']
-        )
+        # Check current favorite status
+        is_favorite = self.db_manager.is_favorite(self.current_user['id'], self.property_data['id'])
         
-        if success:
-            messagebox.showinfo("Success", f"'{self.property_data['title']}' has been added to your favorites!")
+        if is_favorite:
+            # Remove from favorites
+            success = self.db_manager.remove_from_favorites(
+                self.current_user['id'],
+                self.property_data['id']
+            )
+            
+            if success:
+                messagebox.showinfo("Success", f"'{self.property_data['title']}' has been removed from your favorites!")
+                self.favorite_btn.configure(text="Add to Favorites", bg=Config.PRIMARY_COLOR)
+            else:
+                messagebox.showerror("Error", "Failed to remove from favorites")
         else:
-            messagebox.showinfo("Info", "This property is already in your favorites")
+            # Add to favorites
+            success = self.db_manager.add_to_favorites(
+                self.current_user['id'],
+                self.property_data['id']
+            )
+            
+            if success:
+                messagebox.showinfo("Success", f"'{self.property_data['title']}' has been added to your favorites!")
+                self.favorite_btn.configure(text="Remove from Favorites", bg=Config.SECONDARY_COLOR)
+            else:
+                messagebox.showerror("Error", "This property is already in your favorites")
