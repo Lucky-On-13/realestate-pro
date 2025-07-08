@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from config import Config
+from image_manager import ImageManager
 
 class ModernButton(tk.Button):
     def __init__(self, parent, text, command=None, style="primary", **kwargs):
@@ -128,6 +129,7 @@ class PropertyCard(tk.Frame):
         
         self.property_data = property_data
         self.on_click = on_click
+        self.image_manager = ImageManager()
         
         self.create_widgets()
         self.bind_events()
@@ -137,19 +139,50 @@ class PropertyCard(tk.Frame):
         main_frame = tk.Frame(self, bg=Config.CARD_COLOR)
         main_frame.pack(fill="both", expand=True, padx=12, pady=12)
         
-        # Property image placeholder (you can add actual images later)
+        # Property image
         image_frame = tk.Frame(main_frame, bg=Config.BORDER_COLOR, height=120)
         image_frame.pack(fill="x", pady=(0, 10))
         image_frame.pack_propagate(False)
         
-        image_label = tk.Label(
-            image_frame,
-            text="📷 Property Image",
-            font=(Config.FONT_FAMILY, Config.FONT_SIZE_SMALL),
-            bg=Config.BORDER_COLOR,
-            fg=Config.TEXT_SECONDARY
-        )
-        image_label.pack(expand=True)
+        # Load and display property image
+        try:
+            primary_image = self.property_data.get('primary_image')
+            if primary_image:
+                img = self.image_manager.load_image_for_display(
+                    primary_image, 
+                    size=(320, 120),
+                    thumbnail=True
+                )
+                
+                image_label = tk.Label(
+                    image_frame,
+                    image=img,
+                    bg="white"
+                )
+                image_label.pack(expand=True)
+                # Keep reference to prevent garbage collection
+                image_label.image = img
+            else:
+                # Placeholder if no image
+                image_label = tk.Label(
+                    image_frame,
+                    text="📷 No Image",
+                    font=(Config.FONT_FAMILY, Config.FONT_SIZE_SMALL),
+                    bg=Config.BORDER_COLOR,
+                    fg=Config.TEXT_SECONDARY
+                )
+                image_label.pack(expand=True)
+        except Exception as e:
+            print(f"Error loading property image: {e}")
+            # Fallback placeholder
+            image_label = tk.Label(
+                image_frame,
+                text="📷 Image Error",
+                font=(Config.FONT_FAMILY, Config.FONT_SIZE_SMALL),
+                bg=Config.BORDER_COLOR,
+                fg=Config.TEXT_SECONDARY
+            )
+            image_label.pack(expand=True)
         
         # Title (truncated if too long)
         title_text = self.property_data['title']

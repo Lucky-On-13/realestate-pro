@@ -8,6 +8,7 @@ from admin_dashboard import AdminDashboard
 from property_details import PropertyDetailsWindow
 from ui_components import ModernButton, PropertyCard, SearchFilter
 from config import Config
+from user_profile import UserProfileWindow
 
 class RealEstateApp:
     def __init__(self):
@@ -196,6 +197,18 @@ class RealEstateApp:
             )
             user_info_label.pack(side="left", padx=(0, 10))
             
+            # Profile button
+            profile_btn = ModernButton(
+                self.user_frame,
+                text="Profile",
+                command=self.show_profile,
+                style="outline",
+                font=(Config.FONT_FAMILY, Config.FONT_SIZE_SMALL),
+                padx=8,
+                pady=5
+            )
+            profile_btn.pack(side="left", padx=(0, 10))
+            
             # Logout button
             logout_btn = ModernButton(
                 self.user_frame,
@@ -221,6 +234,15 @@ class RealEstateApp:
     def show_admin_auth(self):
         """Show admin authentication window"""
         AdminAuthWindow(self.root, self.db_manager, self.on_admin_login_success)
+    
+    def show_profile(self):
+        """Show user profile window"""
+        UserProfileWindow(self.root, self.db_manager, self.current_user, self.on_user_updated)
+    
+    def on_user_updated(self, updated_user):
+        """Handle user profile update"""
+        self.current_user = updated_user
+        self.update_user_display()
     
     def on_login_success(self, user):
         """Handle successful login"""
